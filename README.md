@@ -2,9 +2,13 @@
 
 一个可复现的多来源论文检索 demo：按关键词从 arXiv、Semantic Scholar 和期刊 RSS 拉取论文，去重后生成 Markdown/JSON 日报；可选用 Ollama 或 Gemini 生成中文摘要，也可通过邮件发送。
 
-## 30 秒 Demo
+## 视频 Demo
 
-下面的命令只访问无需 API key 的 arXiv，并搜索最近的视觉定位论文：
+[![Paper Fetcher 视频演示](assets/demo.gif)](assets/demo.mp4)
+
+> 点击动图可查看或下载 [MP4 原视频](assets/demo.mp4)。视频展示了如何自定义关键词、从 arXiv 获取候选论文并预览筛选结果。
+
+视频中运行的命令只访问无需 API key 的 arXiv：
 
 ```bash
 git clone https://github.com/Anqi00/paper-fetcher.git
@@ -20,36 +24,7 @@ python fetcher.py \
   --no-s2 --no-rss --dry-run
 ```
 
-终端会显示抓取数量、实际使用的时间窗口和最终入选论文（标题会随运行日期变化）：
-
-```text
-── Visual Localization ──
-    [arXiv] 'visual localization' ... 20
-  => 20 篇  (20 arXiv | 0 venue)
-
-共 20 篇未读论文，逐步缩小时间窗口…
-  过去 1 天 → 1 篇，足够 ✓
-
-今日日报 (1 篇)
-┌───┬─────────────────────┬───────┬──────────────────────────┐
-│ # │ 主题                │ 来源  │ 标题                     │
-├───┼─────────────────────┼───────┼──────────────────────────┤
-│ 1 │ Visual Localization │ arXiv │ Latest matching paper... │
-└───┴─────────────────────┴───────┴──────────────────────────┘
-```
-
-去掉 `--dry-run` 后，程序会在 `output/` 中生成 Markdown 和 JSON。例如：
-
-```markdown
-# 论文日报 — YYYY-MM-DD
-
-## 1. Paper title
-**链接:** https://arxiv.org/abs/xxxx.xxxxx
-**主题:** Visual Localization　**来源:** `arXiv`
-**发表:** YYYY-MM-DD
-```
-
-整个 Demo 默认不调用大模型、不发送邮件，也不需要配置任何密钥。
+整个视频 Demo 默认不调用大模型、不发送邮件，也不需要配置任何密钥。去掉 `--dry-run` 后，程序会在 `output/` 中生成 Markdown 和 JSON。
 
 ## 功能
 
