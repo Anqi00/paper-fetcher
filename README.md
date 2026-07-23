@@ -2,6 +2,30 @@
 
 一个可复现的多来源论文检索 demo：按关键词从 arXiv、Semantic Scholar 和期刊 RSS 拉取论文，去重后生成 Markdown/JSON 日报；可选用 Ollama 或 Gemini 生成中文摘要，也可通过邮件发送。
 
+## 视频 Demo
+
+[![Paper Fetcher 视频演示](assets/demo.gif)](assets/demo.mp4)
+
+> 点击动图可查看或下载 [MP4 原视频](assets/demo.mp4)。视频展示了如何自定义关键词、从 arXiv 获取候选论文并预览筛选结果。
+
+视频中运行的命令只访问无需 API key 的 arXiv：
+
+```bash
+git clone https://github.com/Anqi00/paper-fetcher.git
+cd paper-fetcher
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+
+python fetcher.py \
+  --query "visual localization" \
+  --label "Visual Localization" \
+  --max-papers 1 \
+  --no-s2 --no-rss --dry-run
+```
+
+整个视频 Demo 默认不调用大模型、不发送邮件，也不需要配置任何密钥。去掉 `--dry-run` 后，程序会在 `output/` 中生成 Markdown 和 JSON。
+
 ## 功能
 
 - 自定义一个或多个论文检索关键词
