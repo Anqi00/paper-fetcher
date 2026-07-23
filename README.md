@@ -2,6 +2,55 @@
 
 一个可复现的多来源论文检索 demo：按关键词从 arXiv、Semantic Scholar 和期刊 RSS 拉取论文，去重后生成 Markdown/JSON 日报；可选用 Ollama 或 Gemini 生成中文摘要，也可通过邮件发送。
 
+## 30 秒 Demo
+
+下面的命令只访问无需 API key 的 arXiv，并搜索最近的视觉定位论文：
+
+```bash
+git clone https://github.com/Anqi00/paper-fetcher.git
+cd paper-fetcher
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+
+python fetcher.py \
+  --query "visual localization" \
+  --label "Visual Localization" \
+  --max-papers 1 \
+  --no-s2 --no-rss --dry-run
+```
+
+终端会显示抓取数量、实际使用的时间窗口和最终入选论文（标题会随运行日期变化）：
+
+```text
+── Visual Localization ──
+    [arXiv] 'visual localization' ... 20
+  => 20 篇  (20 arXiv | 0 venue)
+
+共 20 篇未读论文，逐步缩小时间窗口…
+  过去 1 天 → 1 篇，足够 ✓
+
+今日日报 (1 篇)
+┌───┬─────────────────────┬───────┬──────────────────────────┐
+│ # │ 主题                │ 来源  │ 标题                     │
+├───┼─────────────────────┼───────┼──────────────────────────┤
+│ 1 │ Visual Localization │ arXiv │ Latest matching paper... │
+└───┴─────────────────────┴───────┴──────────────────────────┘
+```
+
+去掉 `--dry-run` 后，程序会在 `output/` 中生成 Markdown 和 JSON。例如：
+
+```markdown
+# 论文日报 — YYYY-MM-DD
+
+## 1. Paper title
+**链接:** https://arxiv.org/abs/xxxx.xxxxx
+**主题:** Visual Localization　**来源:** `arXiv`
+**发表:** YYYY-MM-DD
+```
+
+整个 Demo 默认不调用大模型、不发送邮件，也不需要配置任何密钥。
+
 ## 功能
 
 - 自定义一个或多个论文检索关键词
