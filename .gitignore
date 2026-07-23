@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+.agents/
+.codex/
+
+# Generated digests, cache and cron logs
+output/*
+!output/.gitkeep
