@@ -86,34 +86,34 @@ python fetcher.py \
 
 ## “不想看”反馈闭环
 
-相关论文不需要做任何操作。只标记不想看的论文即可；例如第 2 篇：
+正式生成日报后，程序会同时创建：
 
-```bash
-python feedback.py dislike 2
+```text
+output/disliked.txt
 ```
 
-上面的简写默认使用当天日报。阅读历史日报时指定日期，日期中不要加空格：
+相关论文不需要做任何操作。看到不想看的论文时，只需打开这个文本文件，新增一行“日报日期 + 论文序号”。例如标记 2026-07-24 日报中的第 2 篇：
 
-```bash
-python feedback.py dislike 2 --date 2026-07-24
+```text
+2026-07-24 2
 ```
 
-查看最近标记：
+可以持续往文件末尾追加：
 
-```bash
-python feedback.py history
+```text
+# 不想看的论文：每行填写“日报日期 论文序号”
+2026-07-24 2
+2026-07-30 1
 ```
 
-标记会保存在 `output/feedback.jsonl`，重复标记同一篇论文只按一条处理。该文件位于 Git 忽略的 `output/` 目录，不会被提交到仓库。
+每篇 Markdown 日报也会在论文下面直接显示需要复制的那一行。日期必须写成完整的 `YYYY-MM-DD`，中间不要加空格。重复添加同一篇论文只按一条处理。
 
-下一次运行 `fetcher.py` 时，程序会自动读取这些记录，根据标题、摘要和主题识别相似论文并降低其排序；没有反馈时，行为与原排序完全一致。可以在 `config.py` 中调整 `FEEDBACK_WEIGHT`，设为 `0` 可关闭降权。
+下一次运行 `fetcher.py` 时，程序会自动读取 `disliked.txt`，从对应的 JSON 日报找到论文，再根据标题、摘要和主题识别相似论文并降低其排序。无法识别的行会在终端显示警告；没有反馈时，行为与原排序完全一致。可以在 `config.py` 中调整 `FEEDBACK_WEIGHT`，设为 `0` 可关闭降权。
 
-如果日报保存在自定义目录，生成日报和标记时应使用同一个目录：
+`disliked.txt` 位于 Git 忽略的 `output/` 目录，不会被提交到仓库。如果使用自定义输出目录，编辑该目录中的 `disliked.txt` 即可：
 
 ```bash
 python fetcher.py --output-dir /path/to/digests
-python feedback.py --output-dir /path/to/digests dislike 1 \
-  --date 2026-07-30
 ```
 
 ## 开放 API 怎么用

@@ -22,7 +22,6 @@ import feedparser
 import json
 import re
 import argparse
-import shlex
 import smtplib
 import time
 from datetime import datetime, timezone, timedelta
@@ -580,11 +579,10 @@ def save_markdown(digest: list[tuple[str, dict]], output_dir: Path, date_str: st
             lines.append(f"**DOI:** https://doi.org/{p['doi']}")
         if p.get("pdf_url"):
             lines.append(f"**PDF:** {p['pdf_url']}")
-        feedback_dir = shlex.quote(str(output_dir.resolve()))
+        dislike_path = output_dir.resolve() / feedback.DISLIKE_FILENAME
         lines.append(
-            f"**不想看类似论文:** `python feedback.py "
-            f"--output-dir {feedback_dir} dislike {i} "
-            f"--date {date_str}`"
+            f"**不想看类似论文:** 在 `{dislike_path}` 新增一行 "
+            f"`{date_str} {i}`"
         )
 
         # AI Chinese summary
@@ -693,12 +691,12 @@ def main():
 
     out_dir = (Path(args.output_dir) if args.output_dir
                else Path(__file__).parent / config.OUTPUT_DIR)
-    feedback_path = out_dir / "feedback.jsonl"
-    feedback_records = feedback.load_feedback(feedback_path)
+    feedback_records, feedback_warnings = feedback.load_dislikes(out_dir)
+    for warning in feedback_warnings:
+        print(f"反馈警告：{warning}")
     dislike_profile = feedback.build_dislike_profile(feedback_records)
     if feedback_records:
-        rated_count = len(feedback.latest_feedback(feedback_records))
-        print(f"已加载 {rated_count} 条“不想看”反馈")
+        print(f"已加载 {len(feedback_records)} 条“不想看”反馈")
 
     max_days = max(config.LOOKBACK_STEPS)
     print(f"抓取过去 {max_days} 天论文，最多输出 {args.max_papers} 篇\n")
@@ -738,6 +736,7 @@ def main():
     digest = enrich_digest(digest)
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    feedback.ensure_dislike_file(out_dir)
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     md_path   = save_markdown(digest, out_dir, date_str)

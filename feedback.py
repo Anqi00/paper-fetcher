@@ -1,16 +1,13 @@
-#!/usr/bin/env python3
-"""Record papers the reader dislikes and build a lightweight exclusion profile."""
+"""Load disliked papers from a text file and build an exclusion profile."""
 
-import argparse
 import json
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
-import config
 
+DISLIKE_FILENAME = "disliked.txt"
 
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "been", "by", "can",
@@ -31,40 +28,81 @@ def paper_key(paper: dict) -> str:
     return f"id:{paper.get('id', '')}"
 
 
-def load_feedback(path: Path) -> list[dict]:
-    """Load valid dislike records, ignoring malformed lines."""
+def ensure_dislike_file(output_dir: Path) -> Path:
+    """Create the editable dislike file with a short example when absent."""
+    path = output_dir / DISLIKE_FILENAME
     if not path.exists():
-        return []
-
-    records = []
-    for line in path.read_text("utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        is_dislike = (
-            record.get("action") == "not_interested"
-            or record.get("score") == 1  # compatibility with the first prototype
+        path.write_text(
+            "# 不想看的论文：每行填写“日报日期 论文序号”\n"
+            "# 示例：2026-07-24 2\n",
+            encoding="utf-8",
         )
-        if record.get("paper_key") and is_dislike:
-            records.append(record)
-    return records
+    return path
 
 
-def append_feedback(path: Path, record: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+def load_dislikes(output_dir: Path) -> tuple[list[dict], list[str]]:
+    """
+    Resolve ``YYYY-MM-DD N`` lines to papers stored in daily JSON digests.
 
+    Returns deduplicated paper records and human-readable warnings for lines
+    that cannot be resolved.
+    """
+    path = output_dir / DISLIKE_FILENAME
+    if not path.exists():
+        return [], []
 
-def latest_feedback(records: list[dict]) -> list[dict]:
-    """Keep one latest feedback record for each paper."""
-    latest = {}
-    for record in records:
-        if record["paper_key"] in latest:
-            del latest[record["paper_key"]]
-        latest[record["paper_key"]] = record
-    return list(latest.values())
+    records = {}
+    warnings = []
+    digest_cache: dict[str, list[dict] | None] = {}
+
+    for line_number, raw_line in enumerate(path.read_text("utf-8").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\s+(\d+)", line)
+        if not match:
+            warnings.append(
+                f"{DISLIKE_FILENAME} 第 {line_number} 行格式无效：{raw_line}"
+            )
+            continue
+
+        date_str, index_text = match.groups()
+        if date_str not in digest_cache:
+            digest_path = output_dir / f"{date_str}.json"
+            try:
+                payload = json.loads(digest_path.read_text("utf-8"))
+                digest_cache[date_str] = payload["papers"]
+            except (OSError, json.JSONDecodeError, KeyError, TypeError):
+                digest_cache[date_str] = None
+
+        papers = digest_cache[date_str]
+        if papers is None:
+            warnings.append(
+                f"{DISLIKE_FILENAME} 第 {line_number} 行找不到日报：{date_str}.json"
+            )
+            continue
+
+        index = int(index_text)
+        if index < 1 or index > len(papers):
+            warnings.append(
+                f"{DISLIKE_FILENAME} 第 {line_number} 行论文序号应在 "
+                f"1 到 {len(papers)} 之间"
+            )
+            continue
+
+        paper = papers[index - 1]
+        key = paper_key(paper)
+        records[key] = {
+            "paper_key": key,
+            "digest_date": date_str,
+            "title": paper.get("title", ""),
+            "abstract": paper.get("abstract", ""),
+            "topic": paper.get("topic", ""),
+            "source": paper.get("source", ""),
+        }
+
+    return list(records.values()), warnings
 
 
 def _features(text: str) -> set[str]:
@@ -84,9 +122,7 @@ def _features(text: str) -> set[str]:
     return features
 
 
-def _normalised_paper_vector(
-    paper: dict, topic: str = "",
-) -> dict[str, float]:
+def _normalised_paper_vector(paper: dict, topic: str = "") -> dict[str, float]:
     vector: Counter[str] = Counter()
     for feature in _features(paper.get("title", "")):
         vector[feature] += 2.0
@@ -94,6 +130,7 @@ def _normalised_paper_vector(
         vector[feature] += 1.0
     for feature in _features(topic or paper.get("topic", "")):
         vector[feature] += 2.0
+
     norm = math.sqrt(sum(value * value for value in vector.values()))
     if not norm:
         return {}
@@ -103,14 +140,9 @@ def _normalised_paper_vector(
 def build_dislike_profile(records: list[dict]) -> dict[str, float]:
     """Build a unit vector describing papers the reader does not want."""
     profile: defaultdict[str, float] = defaultdict(float)
-    for record in latest_feedback(records):
-        paper = {
-            "title": record.get("title", ""),
-            "abstract": record.get("abstract", ""),
-            "topic": record.get("topic", ""),
-        }
+    for record in records:
         vector = _normalised_paper_vector(
-            paper,
+            record,
             topic=record.get("topic", ""),
         )
         for feature, value in vector.items():
@@ -130,72 +162,3 @@ def dislike_similarity(
         return 0.0
     vector = _normalised_paper_vector(paper, topic=topic)
     return sum(profile.get(feature, 0.0) * value for feature, value in vector.items())
-
-
-def _resolve_paper(output_dir: Path, date_str: str, index: int) -> dict:
-    digest_path = output_dir / f"{date_str}.json"
-    if not digest_path.exists():
-        raise ValueError(f"找不到日报：{digest_path}")
-    try:
-        papers = json.loads(digest_path.read_text("utf-8"))["papers"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ValueError(f"日报 JSON 无法读取：{digest_path}") from exc
-    if index < 1 or index > len(papers):
-        raise ValueError(f"论文序号应在 1 到 {len(papers)} 之间")
-    return papers[index - 1]
-
-
-def _dislike(args: argparse.Namespace) -> None:
-    output_dir = Path(args.output_dir)
-    paper = _resolve_paper(output_dir, args.date, args.paper)
-    record = {
-        "paper_key": paper_key(paper),
-        "digest_date": args.date,
-        "action": "not_interested",
-        "title": paper.get("title", ""),
-        "abstract": paper.get("abstract", ""),
-        "topic": paper.get("topic", ""),
-        "source": paper.get("source", ""),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    append_feedback(output_dir / "feedback.jsonl", record)
-    print(f"已标记为不想看：{record['title']}")
-
-
-def _history(args: argparse.Namespace) -> None:
-    records = latest_feedback(load_feedback(Path(args.output_dir) / "feedback.jsonl"))
-    records = records[-args.limit:]
-    if not records:
-        print("还没有“不想看”记录。")
-        return
-    for record in reversed(records):
-        print(f"不想看 | {record.get('title', '')}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="标记不想看的论文，减少类似推荐")
-    parser.add_argument(
-        "--output-dir",
-        default=str(Path(__file__).parent / config.OUTPUT_DIR),
-        help="日报和反馈文件目录",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    dislike = subparsers.add_parser("dislike", help="标记一篇不想看的论文")
-    dislike.add_argument("paper", type=int, help="日报中的论文序号，从 1 开始")
-    dislike.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
-    dislike.set_defaults(func=_dislike)
-
-    history = subparsers.add_parser("history", help="查看最近的“不想看”记录")
-    history.add_argument("--limit", type=int, default=20)
-    history.set_defaults(func=_history)
-
-    args = parser.parse_args()
-    try:
-        args.func(args)
-    except ValueError as exc:
-        parser.error(str(exc))
-
-
-if __name__ == "__main__":
-    main()

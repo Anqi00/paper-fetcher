@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from feedback import build_dislike_profile, dislike_similarity
+from feedback import (
+    build_dislike_profile,
+    dislike_similarity,
+    ensure_dislike_file,
+    load_dislikes,
+)
 from fetcher import deduplicate, save_json, save_markdown, select_digest
 
 
@@ -39,7 +44,6 @@ class FetcherTests(unittest.TestCase):
     def test_dislike_feedback_penalises_similar_paper(self):
         records = [{
             "paper_key": "arxiv:rated",
-            "action": "not_interested",
             "title": "Robotic apple harvesting in orchards",
             "abstract": "A robot arm detects fruit and plans harvesting motions.",
             "topic": "果园机器人",
@@ -60,7 +64,6 @@ class FetcherTests(unittest.TestCase):
     def test_dislike_profile_matches_similar_paper(self):
         rated = {
             "paper_key": "arxiv:rated",
-            "action": "not_interested",
             "title": "Point cloud registration",
             "abstract": "A method for point cloud feature matching.",
             "topic": "点云分析",
@@ -72,7 +75,7 @@ class FetcherTests(unittest.TestCase):
         )
         self.assertGreater(dislike_similarity(candidate, profile, "点云分析"), 0)
 
-    def test_saved_digest_contains_feedback_identity_and_command(self):
+    def test_saved_digest_contains_feedback_identity_and_text_instruction(self):
         digest = [("视觉定位", paper("1234.5678"))]
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -85,8 +88,25 @@ class FetcherTests(unittest.TestCase):
                 "arxiv:1234.5678",
             )
             markdown = markdown_path.read_text("utf-8")
-            self.assertIn("python feedback.py --output-dir", markdown)
-            self.assertIn("dislike 1", markdown)
+            self.assertIn("disliked.txt", markdown)
+            self.assertIn("2026-07-30 1", markdown)
+
+    def test_dislike_text_file_resolves_digest_and_deduplicates(self):
+        digest = [("视觉定位", paper("1234.5678"))]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            save_json(digest, output_dir, "2026-07-30")
+            dislike_path = ensure_dislike_file(output_dir)
+            dislike_path.write_text(
+                "# comment\n2026-07-30 1\n2026-07-30 1\nbad line\n",
+                encoding="utf-8",
+            )
+
+            records, warnings = load_dislikes(output_dir)
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["paper_key"], "arxiv:1234.5678")
+            self.assertEqual(len(warnings), 1)
 
 
 if __name__ == "__main__":
