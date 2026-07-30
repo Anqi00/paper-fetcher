@@ -33,7 +33,7 @@ python fetcher.py \
 - DOI/arXiv ID 去重、时间窗口扩展和已读缓存
 - Markdown 与 JSON 输出
 - `none`、本地 Ollama、Gemini 三种摘要后端
-- 1～5 分本地反馈与下一轮个性化排序
+- “不想看”标记与下一轮自动降权
 - 可选 cron 定时任务与 SMTP 邮件发送
 
 ## 快速开始
@@ -84,43 +84,36 @@ python fetcher.py \
 - `rss_keywords`：在 RSS 标题和摘要中做本地匹配的词
 - `ARXIV_CATEGORIES`：限制 arXiv 分类，例如 `cs.CV`、`cs.RO`
 
-## 反馈闭环与个性化推荐
+## “不想看”反馈闭环
 
-每篇正式生成的日报都会显示一条评分命令。阅读后可以根据日报日期和论文序号打 1～5 分：
+相关论文不需要做任何操作。只标记不想看的论文即可；例如第 2 篇：
 
 ```bash
-python feedback.py rate \
-  --date 2026-07-30 \
-  --paper 2 \
-  --score 5 \
-  --tags "果园机器人,机械臂操作" \
-  --note "应用场景和方法都很相关"
+python feedback.py dislike 2
 ```
 
-评分含义建议保持一致：
+上面的简写默认使用当天日报。阅读历史日报时指定日期，日期中不要加空格：
 
-- `5`：非常想看，希望多推荐类似论文
-- `4`：比较相关
-- `3`：一般，不影响偏好
-- `2`：相关性较低
-- `1`：不希望再推荐类似论文
+```bash
+python feedback.py dislike 2 --date 2026-07-24
+```
 
-查看最近的反馈：
+查看最近标记：
 
 ```bash
 python feedback.py history
 ```
 
-反馈会追加保存在 `output/feedback.jsonl`。同一篇论文可以重新评分，个性化排序只使用最后一次评分。该文件位于 Git 忽略的 `output/` 目录，不会被提交到仓库。
+标记会保存在 `output/feedback.jsonl`，重复标记同一篇论文只按一条处理。该文件位于 Git 忽略的 `output/` 目录，不会被提交到仓库。
 
-下一次运行 `fetcher.py` 时，程序会自动读取反馈，根据历史高分和低分论文的标题、摘要、主题及自定义标签建立轻量偏好向量。最终排序同时考虑原有来源质量和个人相关度；还没有反馈时，行为与原排序完全一致。可以在 `config.py` 中调整 `FEEDBACK_WEIGHT`，设为 `0` 可关闭反馈对排序的影响。
+下一次运行 `fetcher.py` 时，程序会自动读取这些记录，根据标题、摘要和主题识别相似论文并降低其排序；没有反馈时，行为与原排序完全一致。可以在 `config.py` 中调整 `FEEDBACK_WEIGHT`，设为 `0` 可关闭降权。
 
-如果日报保存在自定义目录，生成日报和评分时应使用同一个目录：
+如果日报保存在自定义目录，生成日报和标记时应使用同一个目录：
 
 ```bash
 python fetcher.py --output-dir /path/to/digests
-python feedback.py --output-dir /path/to/digests rate \
-  --date 2026-07-30 --paper 1 --score 4
+python feedback.py --output-dir /path/to/digests dislike 1 \
+  --date 2026-07-30
 ```
 
 ## 开放 API 怎么用

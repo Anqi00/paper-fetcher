@@ -195,7 +195,7 @@ RSS_JOURNALS = [
 MAX_RESULTS_PER_QUERY = 20  # max arXiv results per sub-query
 MAX_PAPERS_TOTAL = 3        # total papers in the daily digest
 
-# 个性化反馈在最终排序中的权重。0 表示关闭反馈对排序的影响。
+# “不想看”反馈在最终排序中的降权强度。0 表示关闭反馈影响。
 FEEDBACK_WEIGHT = 2.0
 
 # 逐步扩大搜索窗口，直到凑满 MAX_PAPERS_TOTAL 篇

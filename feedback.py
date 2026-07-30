@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record paper ratings and build a lightweight preference profile."""
+"""Record papers the reader dislikes and build a lightweight exclusion profile."""
 
 import argparse
 import json
@@ -32,7 +32,7 @@ def paper_key(paper: dict) -> str:
 
 
 def load_feedback(path: Path) -> list[dict]:
-    """Load valid JSONL records, ignoring malformed lines."""
+    """Load valid dislike records, ignoring malformed lines."""
     if not path.exists():
         return []
 
@@ -42,7 +42,11 @@ def load_feedback(path: Path) -> list[dict]:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("paper_key") and record.get("score") in range(1, 6):
+        is_dislike = (
+            record.get("action") == "not_interested"
+            or record.get("score") == 1  # compatibility with the first prototype
+        )
+        if record.get("paper_key") and is_dislike:
             records.append(record)
     return records
 
@@ -54,7 +58,7 @@ def append_feedback(path: Path, record: dict) -> None:
 
 
 def latest_feedback(records: list[dict]) -> list[dict]:
-    """Keep the most recently appended rating for each paper."""
+    """Keep one latest feedback record for each paper."""
     latest = {}
     for record in records:
         if record["paper_key"] in latest:
@@ -81,7 +85,7 @@ def _features(text: str) -> set[str]:
 
 
 def _normalised_paper_vector(
-    paper: dict, topic: str = "", tags: list[str] | None = None,
+    paper: dict, topic: str = "",
 ) -> dict[str, float]:
     vector: Counter[str] = Counter()
     for feature in _features(paper.get("title", "")):
@@ -90,28 +94,16 @@ def _normalised_paper_vector(
         vector[feature] += 1.0
     for feature in _features(topic or paper.get("topic", "")):
         vector[feature] += 2.0
-    for tag in tags or []:
-        for feature in _features(tag):
-            vector[feature] += 3.0
-
     norm = math.sqrt(sum(value * value for value in vector.values()))
     if not norm:
         return {}
     return {feature: value / norm for feature, value in vector.items()}
 
 
-def build_preference_profile(records: list[dict]) -> dict[str, float]:
-    """
-    Build a unit preference vector from the latest ratings.
-
-    Scores above 3 contribute positive features; scores below 3 contribute
-    negative features. A score of 3 is neutral.
-    """
+def build_dislike_profile(records: list[dict]) -> dict[str, float]:
+    """Build a unit vector describing papers the reader does not want."""
     profile: defaultdict[str, float] = defaultdict(float)
     for record in latest_feedback(records):
-        signal = (record["score"] - 3) / 2
-        if not signal:
-            continue
         paper = {
             "title": record.get("title", ""),
             "abstract": record.get("abstract", ""),
@@ -120,10 +112,9 @@ def build_preference_profile(records: list[dict]) -> dict[str, float]:
         vector = _normalised_paper_vector(
             paper,
             topic=record.get("topic", ""),
-            tags=record.get("tags", []),
         )
         for feature, value in vector.items():
-            profile[feature] += signal * value
+            profile[feature] += value
 
     norm = math.sqrt(sum(value * value for value in profile.values()))
     if not norm:
@@ -131,18 +122,14 @@ def build_preference_profile(records: list[dict]) -> dict[str, float]:
     return {feature: value / norm for feature, value in profile.items()}
 
 
-def preference_score(
+def dislike_similarity(
     paper: dict, profile: dict[str, float], topic: str = "",
 ) -> float:
-    """Cosine-like relevance in the range [-1, 1]."""
+    """Return similarity to previously disliked papers in the range [0, 1]."""
     if not profile:
         return 0.0
     vector = _normalised_paper_vector(paper, topic=topic)
     return sum(profile.get(feature, 0.0) * value for feature, value in vector.items())
-
-
-def _parse_tags(value: str) -> list[str]:
-    return [tag.strip() for tag in re.split(r"[,，]", value) if tag.strip()]
 
 
 def _resolve_paper(output_dir: Path, date_str: str, index: int) -> dict:
@@ -154,19 +141,17 @@ def _resolve_paper(output_dir: Path, date_str: str, index: int) -> dict:
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise ValueError(f"日报 JSON 无法读取：{digest_path}") from exc
     if index < 1 or index > len(papers):
-        raise ValueError(f"--paper 应在 1 到 {len(papers)} 之间")
+        raise ValueError(f"论文序号应在 1 到 {len(papers)} 之间")
     return papers[index - 1]
 
 
-def _rate(args: argparse.Namespace) -> None:
+def _dislike(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     paper = _resolve_paper(output_dir, args.date, args.paper)
     record = {
         "paper_key": paper_key(paper),
         "digest_date": args.date,
-        "score": args.score,
-        "tags": _parse_tags(args.tags),
-        "note": args.note.strip(),
+        "action": "not_interested",
         "title": paper.get("title", ""),
         "abstract": paper.get("abstract", ""),
         "topic": paper.get("topic", ""),
@@ -174,22 +159,21 @@ def _rate(args: argparse.Namespace) -> None:
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     append_feedback(output_dir / "feedback.jsonl", record)
-    print(f"已记录 {args.score} 分：{record['title']}")
+    print(f"已标记为不想看：{record['title']}")
 
 
 def _history(args: argparse.Namespace) -> None:
     records = latest_feedback(load_feedback(Path(args.output_dir) / "feedback.jsonl"))
     records = records[-args.limit:]
     if not records:
-        print("还没有评分记录。")
+        print("还没有“不想看”记录。")
         return
     for record in reversed(records):
-        tags = f" [{', '.join(record.get('tags', []))}]" if record.get("tags") else ""
-        print(f"{record['score']} 分 | {record.get('title', '')}{tags}")
+        print(f"不想看 | {record.get('title', '')}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="为论文日报评分并更新本地偏好")
+    parser = argparse.ArgumentParser(description="标记不想看的论文，减少类似推荐")
     parser.add_argument(
         "--output-dir",
         default=str(Path(__file__).parent / config.OUTPUT_DIR),
@@ -197,15 +181,12 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    rate = subparsers.add_parser("rate", help="按日报中的论文序号评分")
-    rate.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
-    rate.add_argument("--paper", type=int, required=True, help="日报中的论文序号，从 1 开始")
-    rate.add_argument("--score", type=int, choices=range(1, 6), required=True)
-    rate.add_argument("--tags", default="", help="可选标签，使用逗号分隔")
-    rate.add_argument("--note", default="", help="可选备注")
-    rate.set_defaults(func=_rate)
+    dislike = subparsers.add_parser("dislike", help="标记一篇不想看的论文")
+    dislike.add_argument("paper", type=int, help="日报中的论文序号，从 1 开始")
+    dislike.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
+    dislike.set_defaults(func=_dislike)
 
-    history = subparsers.add_parser("history", help="查看最近的评分")
+    history = subparsers.add_parser("history", help="查看最近的“不想看”记录")
     history.add_argument("--limit", type=int, default=20)
     history.set_defaults(func=_history)
 

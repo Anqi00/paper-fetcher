@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from feedback import build_preference_profile, preference_score
+from feedback import build_dislike_profile, dislike_similarity
 from fetcher import deduplicate, save_json, save_markdown, select_digest
 
 
@@ -36,16 +36,15 @@ class FetcherTests(unittest.TestCase):
         }
         self.assertEqual(len(select_digest(topics, max_papers=1)), 1)
 
-    def test_positive_feedback_promotes_similar_paper(self):
+    def test_dislike_feedback_penalises_similar_paper(self):
         records = [{
             "paper_key": "arxiv:rated",
-            "score": 5,
+            "action": "not_interested",
             "title": "Robotic apple harvesting in orchards",
             "abstract": "A robot arm detects fruit and plans harvesting motions.",
             "topic": "果园机器人",
-            "tags": ["orchard robot"],
         }]
-        profile = build_preference_profile(records)
+        profile = build_dislike_profile(records)
         generic = paper("generic", abstract="A general survey of robot control.")
         orchard = paper(
             "orchard",
@@ -54,27 +53,24 @@ class FetcherTests(unittest.TestCase):
         selected = select_digest(
             {"果园机器人": [generic, orchard]},
             max_papers=1,
-            preference_profile=profile,
+            dislike_profile=profile,
         )
-        self.assertEqual(selected[0][1]["id"], "orchard")
+        self.assertEqual(selected[0][1]["id"], "generic")
 
-    def test_latest_feedback_for_a_paper_wins(self):
+    def test_dislike_profile_matches_similar_paper(self):
         rated = {
             "paper_key": "arxiv:rated",
+            "action": "not_interested",
             "title": "Point cloud registration",
             "abstract": "A method for point cloud feature matching.",
             "topic": "点云分析",
-            "tags": [],
         }
-        profile = build_preference_profile([
-            {**rated, "score": 5},
-            {**rated, "score": 1},
-        ])
+        profile = build_dislike_profile([rated])
         candidate = paper(
             "candidate",
             abstract="Point cloud registration using learned feature matching.",
         )
-        self.assertLess(preference_score(candidate, profile, "点云分析"), 0)
+        self.assertGreater(dislike_similarity(candidate, profile, "点云分析"), 0)
 
     def test_saved_digest_contains_feedback_identity_and_command(self):
         digest = [("视觉定位", paper("1234.5678"))]
@@ -90,7 +86,7 @@ class FetcherTests(unittest.TestCase):
             )
             markdown = markdown_path.read_text("utf-8")
             self.assertIn("python feedback.py --output-dir", markdown)
-            self.assertIn("--paper 1 --score 5", markdown)
+            self.assertIn("dislike 1", markdown)
 
 
 if __name__ == "__main__":

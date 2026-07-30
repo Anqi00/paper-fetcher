@@ -404,7 +404,7 @@ def progressive_select(
     all_results: dict,
     cache: dict,
     max_papers: int | None = None,
-    preference_profile: dict[str, float] | None = None,
+    dislike_profile: dict[str, float] | None = None,
 ) -> tuple[list, int]:
     """
     Filter out seen papers, then try progressively wider windows
@@ -423,7 +423,7 @@ def progressive_select(
 
     for days in config.LOOKBACK_STEPS:
         window = _apply_window(new_results, days)
-        digest = select_digest(window, max_papers, preference_profile)
+        digest = select_digest(window, max_papers, dislike_profile)
         n = len(digest)
         if n >= max_papers:
             print(f"  过去 {days} 天 → {n} 篇，足够 ✓")
@@ -431,7 +431,7 @@ def progressive_select(
         print(f"  过去 {days} 天 → {n} 篇，不足 {max_papers}，扩大…")
 
     # Fallback: use all new papers regardless of date
-    digest = select_digest(new_results, max_papers, preference_profile)
+    digest = select_digest(new_results, max_papers, dislike_profile)
     return digest, max(config.LOOKBACK_STEPS)
 
 
@@ -451,18 +451,18 @@ def _score(paper: dict) -> int:
 def _rank_score(
     label: str,
     paper: dict,
-    preference_profile: dict[str, float] | None = None,
+    dislike_profile: dict[str, float] | None = None,
 ) -> float:
-    personal = feedback.preference_score(
-        paper, preference_profile or {}, topic=label,
+    similarity = feedback.dislike_similarity(
+        paper, dislike_profile or {}, topic=label,
     )
-    return _score(paper) + config.FEEDBACK_WEIGHT * personal
+    return _score(paper) - config.FEEDBACK_WEIGHT * similarity
 
 
 def select_digest(
     topic_results: dict,
     max_papers: int | None = None,
-    preference_profile: dict[str, float] | None = None,
+    dislike_profile: dict[str, float] | None = None,
 ) -> list[tuple[str, dict]]:
     """One best paper per topic → sort by quality → return top MAX_PAPERS_TOTAL."""
     max_papers = max_papers or config.MAX_PAPERS_TOTAL
@@ -473,14 +473,14 @@ def select_digest(
         best = max(
             papers,
             key=lambda p: (
-                _rank_score(label, p, preference_profile),
+                _rank_score(label, p, dislike_profile),
                 p["published"],
             ),
         )
         candidates.append((label, best))
     candidates.sort(
         key=lambda item: (
-            _rank_score(item[0], item[1], preference_profile),
+            _rank_score(item[0], item[1], dislike_profile),
             item[1]["published"],
         ),
         reverse=True,
@@ -582,9 +582,9 @@ def save_markdown(digest: list[tuple[str, dict]], output_dir: Path, date_str: st
             lines.append(f"**PDF:** {p['pdf_url']}")
         feedback_dir = shlex.quote(str(output_dir.resolve()))
         lines.append(
-            f"**反馈（1–5 分）:** `python feedback.py "
-            f"--output-dir {feedback_dir} rate "
-            f"--date {date_str} --paper {i} --score 5`"
+            f"**不想看类似论文:** `python feedback.py "
+            f"--output-dir {feedback_dir} dislike {i} "
+            f"--date {date_str}`"
         )
 
         # AI Chinese summary
@@ -695,10 +695,10 @@ def main():
                else Path(__file__).parent / config.OUTPUT_DIR)
     feedback_path = out_dir / "feedback.jsonl"
     feedback_records = feedback.load_feedback(feedback_path)
-    preference_profile = feedback.build_preference_profile(feedback_records)
+    dislike_profile = feedback.build_dislike_profile(feedback_records)
     if feedback_records:
         rated_count = len(feedback.latest_feedback(feedback_records))
-        print(f"已加载 {rated_count} 篇论文的最新评分")
+        print(f"已加载 {rated_count} 条“不想看”反馈")
 
     max_days = max(config.LOOKBACK_STEPS)
     print(f"抓取过去 {max_days} 天论文，最多输出 {args.max_papers} 篇\n")
@@ -717,7 +717,7 @@ def main():
         all_results,
         cache,
         args.max_papers,
-        preference_profile,
+        dislike_profile,
     )
 
     print()
