@@ -22,6 +22,7 @@ import feedparser
 import json
 import re
 import argparse
+import shlex
 import smtplib
 import time
 from datetime import datetime, timezone, timedelta
@@ -30,6 +31,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import config
+import feedback
 
 ARXIV_DELAY = 4.0   # seconds between arXiv API calls
 S2_DELAY    = 3.0   # seconds between Semantic Scholar calls
@@ -398,8 +400,12 @@ def _apply_window(all_results: dict, days: int) -> dict:
     }
 
 
-def progressive_select(all_results: dict, cache: dict,
-                       max_papers: int | None = None) -> tuple[list, int]:
+def progressive_select(
+    all_results: dict,
+    cache: dict,
+    max_papers: int | None = None,
+    preference_profile: dict[str, float] | None = None,
+) -> tuple[list, int]:
     """
     Filter out seen papers, then try progressively wider windows
     until MAX_PAPERS_TOTAL papers are found.
@@ -417,7 +423,7 @@ def progressive_select(all_results: dict, cache: dict,
 
     for days in config.LOOKBACK_STEPS:
         window = _apply_window(new_results, days)
-        digest = select_digest(window, max_papers)
+        digest = select_digest(window, max_papers, preference_profile)
         n = len(digest)
         if n >= max_papers:
             print(f"  过去 {days} 天 → {n} 篇，足够 ✓")
@@ -425,7 +431,7 @@ def progressive_select(all_results: dict, cache: dict,
         print(f"  过去 {days} 天 → {n} 篇，不足 {max_papers}，扩大…")
 
     # Fallback: use all new papers regardless of date
-    digest = select_digest(new_results, max_papers)
+    digest = select_digest(new_results, max_papers, preference_profile)
     return digest, max(config.LOOKBACK_STEPS)
 
 
@@ -442,17 +448,43 @@ def _score(paper: dict) -> int:
     return 2  # CV/robotics conference
 
 
-def select_digest(topic_results: dict,
-                  max_papers: int | None = None) -> list[tuple[str, dict]]:
+def _rank_score(
+    label: str,
+    paper: dict,
+    preference_profile: dict[str, float] | None = None,
+) -> float:
+    personal = feedback.preference_score(
+        paper, preference_profile or {}, topic=label,
+    )
+    return _score(paper) + config.FEEDBACK_WEIGHT * personal
+
+
+def select_digest(
+    topic_results: dict,
+    max_papers: int | None = None,
+    preference_profile: dict[str, float] | None = None,
+) -> list[tuple[str, dict]]:
     """One best paper per topic → sort by quality → return top MAX_PAPERS_TOTAL."""
     max_papers = max_papers or config.MAX_PAPERS_TOTAL
     candidates: list[tuple[str, dict]] = []
     for label, papers in topic_results.items():
         if not papers:
             continue
-        best = max(papers, key=lambda p: (_score(p), p["published"]))
+        best = max(
+            papers,
+            key=lambda p: (
+                _rank_score(label, p, preference_profile),
+                p["published"],
+            ),
+        )
         candidates.append((label, best))
-    candidates.sort(key=lambda t: (_score(t[1]), t[1]["published"]), reverse=True)
+    candidates.sort(
+        key=lambda item: (
+            _rank_score(item[0], item[1], preference_profile),
+            item[1]["published"],
+        ),
+        reverse=True,
+    )
     return candidates[:max_papers]
 
 
@@ -548,6 +580,12 @@ def save_markdown(digest: list[tuple[str, dict]], output_dir: Path, date_str: st
             lines.append(f"**DOI:** https://doi.org/{p['doi']}")
         if p.get("pdf_url"):
             lines.append(f"**PDF:** {p['pdf_url']}")
+        feedback_dir = shlex.quote(str(output_dir.resolve()))
+        lines.append(
+            f"**反馈（1–5 分）:** `python feedback.py "
+            f"--output-dir {feedback_dir} rate "
+            f"--date {date_str} --paper {i} --score 5`"
+        )
 
         # AI Chinese summary
         if p.get("summary_zh"):
@@ -570,7 +608,10 @@ def save_json(digest: list[tuple[str, dict]], output_dir: Path, date_str: str) -
         json.dumps({
             "date":       date_str,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "papers":     [{"topic": label, **paper} for label, paper in digest],
+            "papers":     [
+                {**paper, "feedback_id": _key(paper), "topic": label}
+                for label, paper in digest
+            ],
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -650,6 +691,15 @@ def main():
             "rss_keywords": args.query,
         }]
 
+    out_dir = (Path(args.output_dir) if args.output_dir
+               else Path(__file__).parent / config.OUTPUT_DIR)
+    feedback_path = out_dir / "feedback.jsonl"
+    feedback_records = feedback.load_feedback(feedback_path)
+    preference_profile = feedback.build_preference_profile(feedback_records)
+    if feedback_records:
+        rated_count = len(feedback.latest_feedback(feedback_records))
+        print(f"已加载 {rated_count} 篇论文的最新评分")
+
     max_days = max(config.LOOKBACK_STEPS)
     print(f"抓取过去 {max_days} 天论文，最多输出 {args.max_papers} 篇\n")
 
@@ -663,7 +713,12 @@ def main():
 
     # ── 2. 读缓存 + 逐步缩小时间窗口选出今日 3 篇 ──────────────────────────
     cache = load_cache() if not args.no_cache else {}
-    digest, used_days = progressive_select(all_results, cache, args.max_papers)
+    digest, used_days = progressive_select(
+        all_results,
+        cache,
+        args.max_papers,
+        preference_profile,
+    )
 
     print()
     print_digest(digest)
@@ -682,8 +737,6 @@ def main():
     print("\n正在生成中文总结…")
     digest = enrich_digest(digest)
 
-    out_dir = (Path(args.output_dir) if args.output_dir
-               else Path(__file__).parent / config.OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d")
 

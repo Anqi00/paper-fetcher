@@ -33,6 +33,7 @@ python fetcher.py \
 - DOI/arXiv ID 去重、时间窗口扩展和已读缓存
 - Markdown 与 JSON 输出
 - `none`、本地 Ollama、Gemini 三种摘要后端
+- 1～5 分本地反馈与下一轮个性化排序
 - 可选 cron 定时任务与 SMTP 邮件发送
 
 ## 快速开始
@@ -82,6 +83,45 @@ python fetcher.py \
 - `s2_queries`：发送给 Semantic Scholar 的检索词
 - `rss_keywords`：在 RSS 标题和摘要中做本地匹配的词
 - `ARXIV_CATEGORIES`：限制 arXiv 分类，例如 `cs.CV`、`cs.RO`
+
+## 反馈闭环与个性化推荐
+
+每篇正式生成的日报都会显示一条评分命令。阅读后可以根据日报日期和论文序号打 1～5 分：
+
+```bash
+python feedback.py rate \
+  --date 2026-07-30 \
+  --paper 2 \
+  --score 5 \
+  --tags "果园机器人,机械臂操作" \
+  --note "应用场景和方法都很相关"
+```
+
+评分含义建议保持一致：
+
+- `5`：非常想看，希望多推荐类似论文
+- `4`：比较相关
+- `3`：一般，不影响偏好
+- `2`：相关性较低
+- `1`：不希望再推荐类似论文
+
+查看最近的反馈：
+
+```bash
+python feedback.py history
+```
+
+反馈会追加保存在 `output/feedback.jsonl`。同一篇论文可以重新评分，个性化排序只使用最后一次评分。该文件位于 Git 忽略的 `output/` 目录，不会被提交到仓库。
+
+下一次运行 `fetcher.py` 时，程序会自动读取反馈，根据历史高分和低分论文的标题、摘要、主题及自定义标签建立轻量偏好向量。最终排序同时考虑原有来源质量和个人相关度；还没有反馈时，行为与原排序完全一致。可以在 `config.py` 中调整 `FEEDBACK_WEIGHT`，设为 `0` 可关闭反馈对排序的影响。
+
+如果日报保存在自定义目录，生成日报和评分时应使用同一个目录：
+
+```bash
+python fetcher.py --output-dir /path/to/digests
+python feedback.py --output-dir /path/to/digests rate \
+  --date 2026-07-30 --paper 1 --score 4
+```
 
 ## 开放 API 怎么用
 
