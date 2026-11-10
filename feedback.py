@@ -162,3 +162,33 @@ def dislike_similarity(
         return 0.0
     vector = _normalised_paper_vector(paper, topic=topic)
     return sum(profile.get(feature, 0.0) * value for feature, value in vector.items())
+
+
+_ENTRY = re.compile(r"(\d{4}-\d{2}-\d{2})\s+(\d+)")
+
+
+def disliked_entries(output_dir: Path) -> set[tuple[str, int]]:
+    """All ``(date, index)`` pairs currently listed in the dislike file."""
+    path = output_dir / DISLIKE_FILENAME
+    if not path.exists():
+        return set()
+    entries = set()
+    for line in path.read_text("utf-8").splitlines():
+        match = _ENTRY.fullmatch(line.strip())
+        if match:
+            entries.add((match.group(1), int(match.group(2))))
+    return entries
+
+
+def set_dislike(output_dir: Path, date_str: str, index: int, disliked: bool) -> None:
+    """Add or remove one ``YYYY-MM-DD N`` line, keeping comments and order."""
+    path = ensure_dislike_file(output_dir)
+    lines = path.read_text("utf-8").splitlines()
+    kept = [
+        line for line in lines
+        if not ((m := _ENTRY.fullmatch(line.strip()))
+                and (m.group(1), int(m.group(2))) == (date_str, index))
+    ]
+    if disliked:
+        kept.append(f"{date_str} {index}")
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")

@@ -14,6 +14,7 @@ Usage:
   python3 fetcher.py --no-s2       # skip Semantic Scholar
   python3 fetcher.py --no-rss      # skip RSS journals
   python3 fetcher.py --no-cache    # ignore seen-paper cache
+  python3 fetcher.py --resummarize 2026-11-10   # 重新总结已有日报
 """
 
 import arxiv
@@ -31,6 +32,7 @@ from email.mime.text import MIMEText
 
 import config
 import feedback
+import summarizer
 
 ARXIV_DELAY = 4.0   # seconds between arXiv API calls
 S2_DELAY    = 3.0   # seconds between Semantic Scholar calls
@@ -45,12 +47,23 @@ def _arxiv_primary(result) -> str:
     return pc if isinstance(pc, str) else (pc.id if pc else "")
 
 
+def build_arxiv_query(query: str, categories: list[str]) -> str:
+    """
+    arXiv ORs bare words together, so "3D Gaussian splatting" would match any
+    paper containing "3D". Require every word unless the query already uses
+    arXiv syntax (field prefixes or quotes).
+    """
+    if ":" not in query and '"' not in query:
+        query = " AND ".join(f"all:{word}" for word in query.split())
+    cat_filter = " OR ".join(f"cat:{c}" for c in categories)
+    return f"({query}) AND ({cat_filter})"
+
+
 def _arxiv_query(query: str, categories: list[str],
                  max_results: int, since: datetime) -> list[dict]:
-    cat_filter = " OR ".join(f"cat:{c}" for c in categories)
     client = arxiv.Client(page_size=50, delay_seconds=3.0, num_retries=5)
     search = arxiv.Search(
-        query=f"({query}) AND ({cat_filter})",
+        query=build_arxiv_query(query, categories),
         max_results=max_results,
         sort_by=arxiv.SortCriterion.SubmittedDate,
         sort_order=arxiv.SortOrder.Descending,
@@ -123,6 +136,13 @@ def _shorten_venue(venue: str) -> str:
     return venue[:20]
 
 
+class S2RateLimited(RuntimeError):
+    pass
+
+
+_s2_disabled = False
+
+
 def _s2_query(query: str, since: datetime,
               max_results: int = 50, api_key: str = "") -> list[dict]:
     url     = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -145,7 +165,7 @@ def _s2_query(query: str, since: datetime,
         resp.raise_for_status()
         break
     else:
-        raise RuntimeError("S2 rate-limited after retries")
+        raise S2RateLimited("S2 rate-limited after retries")
 
     papers = []
     for p in resp.json().get("data", []):
@@ -187,14 +207,21 @@ def _s2_query(query: str, since: datetime,
 def fetch_s2_topic(topic: dict, since: datetime) -> list[dict]:
     s2_since = min(since,
                    datetime.now(timezone.utc) - timedelta(days=config.S2_LOOKBACK_DAYS))
+    global _s2_disabled
     collected = []
     for query in topic.get("s2_queries", []):
+        if _s2_disabled:
+            break
         print(f"    [S2]    {query!r} ...", end=" ", flush=True)
         try:
             papers = _s2_query(query, s2_since,
                                config.MAX_S2_RESULTS_PER_QUERY, config.S2_API_KEY)
             print(f"{len(papers)} (venue-filtered)")
             collected.extend(papers)
+        except S2RateLimited as e:
+            # 无 key 时共享限额常被耗尽，继续重试只会白等几十分钟
+            print(f"ERR: {e}；本次运行跳过其余 S2 查询（建议设置 S2_API_KEY）")
+            _s2_disabled = True
         except Exception as e:
             print(f"ERR: {e}")
         time.sleep(S2_DELAY)
@@ -275,7 +302,7 @@ def fetch_rss_journal(journal: dict, since: datetime) -> list[dict]:
             m = re.search(r"Author\(s\):\s*([^<]+)", summary, re.IGNORECASE)
             authors = [a.strip() for a in m.group(1).split(",")] if m else []
 
-        abstract = "" if date_in_html else _strip_html(summary)
+        abstract = "" if date_in_html else " ".join(_strip_html(summary).split())
 
         papers.append({
             "id": doi or link, "arxiv_id": "", "doi": doi,
@@ -287,9 +314,44 @@ def fetch_rss_journal(journal: dict, since: datetime) -> list[dict]:
     return papers
 
 
+def _topic_keywords(topic: dict) -> list[str]:
+    return [kw.lower() for kw in topic.get("keywords") or topic.get("rss_keywords", [])]
+
+
+def relevance(paper: dict, topic: dict) -> int:
+    """Keyword relevance: +2 per keyword in the title, +1 if only in the abstract."""
+    title = paper.get("title", "").lower()
+    abstract = paper.get("abstract", "").lower()
+    score = 0
+    for kw in _topic_keywords(topic):
+        if kw in title:
+            score += 2
+        elif kw in abstract:
+            score += 1
+    return min(score, config.RELEVANCE_CAP)
+
+
+def is_excluded(paper: dict) -> bool:
+    text = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
+    return any(kw.lower() in text for kw in config.EXCLUDE_KEYWORDS)
+
+
 def _matches_topic(paper: dict, topic: dict) -> bool:
     text = (paper["title"] + " " + paper["abstract"]).lower()
-    return any(kw.lower() in text for kw in topic.get("rss_keywords", []))
+    return any(kw in text for kw in _topic_keywords(topic))
+
+
+def score_and_filter(papers: list[dict], topic: dict) -> list[dict]:
+    """Attach a relevance score and drop off-topic or excluded papers."""
+    min_rel = topic.get("min_relevance", config.MIN_RELEVANCE)
+    kept = []
+    for paper in papers:
+        if is_excluded(paper):
+            continue
+        rel = relevance(paper, topic)
+        if rel >= min_rel:
+            kept.append({**paper, "relevance": rel})
+    return kept
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -387,6 +449,13 @@ def fetch_all(lookback_days: int, use_s2: bool,
                         if _key(paper) not in existing:
                             topic_results[topic["label"]].append(paper)
 
+    print("\n── 相关性过滤 ──")
+    for topic in topics:
+        label = topic["label"]
+        before = len(topic_results[label])
+        topic_results[label] = score_and_filter(topic_results[label], topic)
+        print(f"  {label}: {before} → {len(topic_results[label])} 篇")
+
     return topic_results
 
 
@@ -410,9 +479,13 @@ def progressive_select(
     until MAX_PAPERS_TOTAL papers are found.
     Returns (digest, days_used).
     """
-    # Remove already-seen papers
+    # Remove already-seen papers and weak candidates (e.g. title-only RSS
+    # entries with a single keyword hit): better to widen the time window.
     new_results = {
-        label: [p for p in papers if _key(p) not in cache]
+        label: [
+            p for p in papers
+            if _key(p) not in cache and _score(p) >= config.MIN_RELEVANCE
+        ]
         for label, papers in all_results.items()
     }
 
@@ -438,13 +511,12 @@ def progressive_select(
 #  Digest selection  (global top-N, one per topic at most)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _score(paper: dict) -> int:
-    src = paper.get("source", "")
-    if src == "arXiv":
-        return 1
-    if src in ("COMPAG", "AIA", "Biosyst.Eng.", "SmartAg", "PrecAg", "JFR"):
-        return 3
-    return 2  # CV/robotics conference
+def _score(paper: dict) -> float:
+    """Relevance dominates; a peer-reviewed venue only breaks near-ties."""
+    source_bonus = 0.0 if paper.get("source") == "arXiv" else 0.5
+    # 没有摘要的条目（如 ScienceDirect RSS）只能按标题总结，信息量低
+    no_abstract_penalty = 0.0 if paper.get("abstract") else 2.0
+    return paper.get("relevance", 0) + source_bonus - no_abstract_penalty
 
 
 def _rank_score(
@@ -488,68 +560,28 @@ def select_digest(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  AI Summarisation  —  backends: gemini | ollama | none
+#  AI Summarisation  —  see summarizer.py
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _build_prompt(title: str, abstract: str) -> str:
-    if abstract:
-        return (
-            "请用3句中文概括以下论文的核心问题、主要方法和关键结论，"
-            "语言简洁，不需要任何前言或引导句，直接给出3句话。\n\n"
-            f"标题：{title}\n\n摘要：{abstract}"
-        )
-    return (
-        "根据以下论文标题，用3句中文推测该研究的核心问题、可能的方法和预期贡献，"
-        "语言简洁，直接给出3句话。\n\n"
-        f"标题：{title}"
-    )
-
-
-def _summarise_gemini(title: str, abstract: str) -> str:
-    import os
-    from google import genai
-    key = config.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY 未设置，请填入 config.py 或环境变量")
-    client = genai.Client(api_key=key)
-    resp   = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=_build_prompt(title, abstract),
-    )
-    return resp.text.strip()
-
-
-def _summarise_ollama(title: str, abstract: str) -> str:
-    resp = requests.post(
-        f"{config.OLLAMA_HOST}/api/generate",
-        json={"model": config.OLLAMA_MODEL,
-              "prompt": _build_prompt(title, abstract),
-              "stream": False},
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()["response"].strip()
-
-
-def summarise_paper(title: str, abstract: str) -> str:
-    backend = config.SUMMARY_BACKEND
-    try:
-        if backend == "gemini":
-            return _summarise_gemini(title, abstract)
-        if backend == "ollama":
-            return _summarise_ollama(title, abstract)
-        return ""   # "none" — skip
-    except Exception as e:
-        return f"（总结失败：{e}）"
-
-
-def enrich_digest(digest: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-    """Add 'summary_zh' field to each paper in the digest."""
+def enrich_digest(
+    digest: list[tuple[str, dict]], sort_by_rating: bool = True,
+) -> list[tuple[str, dict]]:
+    """Summarise each paper, then (optionally) put the most valuable first."""
+    if config.SUMMARY_BACKEND not in ("ollama", "gemini"):
+        print("  SUMMARY_BACKEND=none，跳过总结（可在 .env 中设置 ollama 或 gemini）")
+        return digest
     enriched = []
     for i, (label, paper) in enumerate(digest, 1):
-        print(f"  [{i}/{len(digest)}] 总结: {paper['title'][:55]}…")
-        summary = summarise_paper(paper["title"], paper.get("abstract", ""))
-        enriched.append((label, {**paper, "summary_zh": summary}))
+        print(f"  [{i}/{len(digest)}] 总结: {paper['title'][:55]}…", flush=True)
+        paper = summarizer.summarise_paper(paper)
+        basis = summarizer.basis_text(paper)
+        print(f"        依据：{basis}  推荐度：{(paper.get('summary') or {}).get('rating')}")
+        enriched.append((label, paper))
+    if sort_by_rating:
+        enriched.sort(
+            key=lambda item: (item[1].get("summary") or {}).get("rating") or 0,
+            reverse=True,
+        )
     return enriched
 
 
@@ -558,42 +590,53 @@ def enrich_digest(digest: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def save_markdown(digest: list[tuple[str, dict]], output_dir: Path, date_str: str) -> Path:
-    path  = output_dir / f"{date_str}.md"
+    path = output_dir / f"{date_str}.md"
+    dislike_path = output_dir.resolve() / feedback.DISLIKE_FILENAME
     lines = [f"# 论文日报 — {date_str}", ""]
 
+    # 30 秒速览：先决定读哪篇，再往下看细节
+    lines += ["| # | 推荐度 | 主题 | 一句话 |", "|---|---|---|---|"]
     for i, (label, p) in enumerate(digest, 1):
-        src         = p.get("source", "")
-        venue_disp  = p.get("venue") or src
-        authors_str = ", ".join(p["authors"])
-        if len(p["authors"]) == 6:
+        rating = (p.get("summary") or {}).get("rating")
+        lines.append(
+            f"| {i} | {summarizer.stars(rating)} | {label} | "
+            f"{summarizer.overview_line(p)} |"
+        )
+    lines += ["", "---", ""]
+
+    for i, (label, p) in enumerate(digest, 1):
+        src = p.get("source", "")
+        authors_str = ", ".join(p.get("authors", []))
+        if len(p.get("authors", [])) == 6:
             authors_str += " et al."
 
+        links = [f"[原文]({p['url']})"]
+        if p.get("pdf_url") and p["pdf_url"] != p["url"]:
+            links.append(f"[PDF]({p['pdf_url']})")
+        if p.get("doi") and f"doi.org/{p['doi']}" not in p["url"]:
+            links.append(f"[DOI](https://doi.org/{p['doi']})")
+        meta = [f"`{label}`", src, p.get("published", ""), " · ".join(links)]
+        if p.get("summary_basis"):
+            meta.append(f"总结依据：{summarizer.basis_text(p)}")
+
         lines.append(f"## {i}. {p['title']}")
-        lines.append(f"**链接:** {p['url']}")
-        lines.append(f"**主题:** {label}　**来源:** `{src}`　**发表:** {p['published']}")
+        lines.append(" · ".join(m for m in meta if m))
+        if p.get("venue") and p["venue"] != src:
+            lines.append(f"<br>期刊/会议：{p['venue']}")
         if authors_str:
-            lines.append(f"**作者:** {authors_str}")
-        if venue_disp and venue_disp != src:
-            lines.append(f"**期刊/会议:** {venue_disp}")
-        if p.get("doi"):
-            lines.append(f"**DOI:** https://doi.org/{p['doi']}")
-        if p.get("pdf_url"):
-            lines.append(f"**PDF:** {p['pdf_url']}")
-        dislike_path = output_dir.resolve() / feedback.DISLIKE_FILENAME
-        lines.append(
-            f"**不想看类似论文:** 在 `{dislike_path}` 新增一行 "
-            f"`{date_str} {i}`"
-        )
+            lines.append(f"<br>作者：{authors_str}")
+        lines.append("")
 
-        # AI Chinese summary
-        if p.get("summary_zh"):
-            lines.append(f"\n**内容总结:**\n{p['summary_zh']}")
+        lines += summarizer.render_summary(p)
 
-        # Original abstract (collapsed, for reference)
         if p.get("abstract"):
-            snip = p["abstract"][:400] + ("…" if len(p["abstract"]) > 400 else "")
-            lines.append(f"\n<details><summary>原文摘要</summary>\n\n{snip}\n\n</details>")
-
+            lines.append(
+                "<details><summary>原文摘要</summary>\n\n"
+                f"{' '.join(p['abstract'].split())}\n\n</details>\n"
+            )
+        lines.append(
+            f"<sub>不想看类似论文：在 `{dislike_path}` 新增一行 `{date_str} {i}`</sub>"
+        )
         lines.append("\n---\n")
 
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -657,6 +700,18 @@ def send_email(md_content: str, date_str: str):
 #  Entry point
 # ══════════════════════════════════════════════════════════════════════════════
 
+def resummarize(out_dir: Path, date_str: str):
+    json_path = out_dir / f"{date_str}.json"
+    payload = json.loads(json_path.read_text("utf-8"))
+    digest = [(p.get("topic", ""), p) for p in payload["papers"]]
+    print(f"重新总结 {json_path}（{len(digest)} 篇）")
+    # 保持原顺序，否则 disliked.txt 里已写的序号会错位
+    digest = enrich_digest(digest, sort_by_rating=False)
+    save_json(digest, out_dir, date_str)
+    md_path = save_markdown(digest, out_dir, date_str)
+    print(f"\n已保存: {md_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="多来源论文检索与每日摘要")
     parser.add_argument("--dry-run",    action="store_true", help="预览，不保存文件和缓存")
@@ -675,6 +730,10 @@ def main():
         "--max-papers", type=int, default=config.MAX_PAPERS_TOTAL,
         help=f"本次最多输出几篇（默认 {config.MAX_PAPERS_TOTAL}）",
     )
+    parser.add_argument(
+        "--resummarize", metavar="YYYY-MM-DD",
+        help="不抓取新论文，只为已有日报重新生成总结",
+    )
     args = parser.parse_args()
 
     if args.max_papers < 1:
@@ -686,11 +745,16 @@ def main():
             "label": args.label,
             "arxiv_queries": args.query,
             "s2_queries": args.query,
-            "rss_keywords": args.query,
+            "keywords": args.query,
+            "min_relevance": 0,   # 自定义检索直接信任 API 结果
         }]
 
     out_dir = (Path(args.output_dir) if args.output_dir
                else Path(__file__).parent / config.OUTPUT_DIR)
+
+    if args.resummarize:
+        resummarize(out_dir, args.resummarize)
+        return
     feedback_records, feedback_warnings = feedback.load_dislikes(out_dir)
     for warning in feedback_warnings:
         print(f"反馈警告：{warning}")
