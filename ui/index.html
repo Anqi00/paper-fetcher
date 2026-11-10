@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>论文日报</title>
+<style>
+:root {
+  --bg: #f6f5f1;
+  --panel: #ffffff;
+  --ink: #1d1d1f;
+  --ink-2: #55555c;
+  --ink-3: #8a8a93;
+  --line: #e4e2dc;
+  --accent: #2f6f4f;
+  --accent-soft: #e6f0ea;
+  --star: #c98a12;
+  --warn: #b3412e;
+  --warn-soft: #f8e7e3;
+  --chip: #efeee9;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416;
+    --panel: #1c1c1f;
+    --ink: #ececef;
+    --ink-2: #b4b4bc;
+    --ink-3: #7c7c86;
+    --line: #2c2c31;
+    --accent: #6cc196;
+    --accent-soft: #1d2d25;
+    --star: #e2b04a;
+    --warn: #ef8a78;
+    --warn-soft: #3a2320;
+    --chip: #26262b;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.7 -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button {
+  font: inherit; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  padding: 6px 12px;
+}
+button:hover { border-color: var(--ink-3); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.primary { color: #0f1a14; } }
+
+header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .02em; }
+header .spacer { flex: 1; }
+header .hint { color: var(--ink-3); font-size: 13px; }
+
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px;
+  max-width: 1180px; margin: 0 auto; padding: 20px 24px 80px; }
+nav { position: sticky; top: 72px; align-self: start; max-height: calc(100vh - 92px); overflow: auto; }
+nav .group { font-size: 12px; color: var(--ink-3); margin: 14px 8px 4px; }
+nav button.day {
+  display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: none;
+  padding: 6px 10px; border-radius: 8px; text-align: left; color: var(--ink-2);
+}
+nav button.day:hover { background: var(--chip); }
+nav button.day.active { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+nav .day .d { flex: 1; font-variant-numeric: tabular-nums; }
+nav .day .s { color: var(--star); font-size: 12px; }
+nav .day .n { color: var(--ink-3); font-size: 12px; }
+
+main { min-width: 0; }
+.daytitle { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 4px 0 14px; }
+.daytitle h2 { margin: 0; font-size: 24px; }
+.daytitle .sub { color: var(--ink-3); font-size: 13px; }
+
+.banner { background: var(--panel); border: 1px dashed var(--line); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.banner p { margin: 0; flex: 1; color: var(--ink-2); min-width: 200px; }
+
+.overview { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden; }
+.overview a.row { display: grid; grid-template-columns: 28px 72px minmax(0, 1fr); gap: 10px;
+  padding: 10px 16px; color: var(--ink); border-top: 1px solid var(--line); }
+.overview a.row:first-child { border-top: 0; }
+.overview a.row:hover { background: var(--chip); text-decoration: none; }
+.overview .num { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.overview .gist { overflow: hidden; }
+.overview .gist small { color: var(--ink-3); margin-right: 6px; }
+.overview a.row.dim { opacity: .45; }
+
+.stars { color: var(--star); letter-spacing: 1px; white-space: nowrap; }
+.stars .off { color: var(--line); }
+
+article.paper { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 20px; scroll-margin-top: 80px;
+  transition: opacity .2s; }
+article.paper.disliked { opacity: .55; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 13px; color: var(--ink-3); }
+.chip { background: var(--chip); color: var(--ink-2); border-radius: 999px; padding: 1px 10px; font-size: 12.5px; }
+.chip.topic { background: var(--accent-soft); color: var(--accent); }
+.paper h3 { font-size: 19px; line-height: 1.45; margin: 10px 0 2px; }
+.paper h3 a { color: var(--ink); }
+.authors { color: var(--ink-3); font-size: 13px; margin-bottom: 12px; }
+.rating { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 8px 0; }
+.rating .why { color: var(--ink-2); font-size: 14px; }
+.tldr { font-size: 16.5px; font-weight: 550; border-left: 3px solid var(--accent); padding: 2px 0 2px 12px; margin: 12px 0; }
+.relevance { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; margin: 12px 0 16px; }
+.relevance b { color: var(--accent); margin-right: 4px; }
+dl.fields { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px 16px; margin: 0; }
+dl.fields dt { color: var(--ink-3); font-size: 13.5px; padding-top: 2px; }
+dl.fields dd { margin: 0; }
+dl.fields ol { margin: 0; padding-left: 20px; }
+.legacy { color: var(--ink-2); }
+.err { color: var(--warn); }
+details.abstract { margin-top: 14px; color: var(--ink-2); font-size: 14px; }
+details.abstract summary { cursor: pointer; color: var(--ink-3); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px;
+  padding-top: 14px; border-top: 1px solid var(--line); }
+.actions .spacer { flex: 1; }
+button.dislike.on { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+
+#job { position: fixed; right: 20px; bottom: 20px; width: min(520px, calc(100vw - 32px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.15); display: none; z-index: 10; }
+#job.show { display: block; }
+#job .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+#job .head b { flex: 1; }
+#job pre { margin: 0; padding: 10px 14px; max-height: 240px; overflow: auto; font-size: 12px;
+  line-height: 1.5; white-space: pre-wrap; color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.dot.run { animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .2; } }
+.empty { color: var(--ink-3); padding: 40px 0; text-align: center; }
+
+@media (max-width: 760px) {
+  header { padding: 10px 16px; }
+  header .hint { display: none; }
+  .layout { grid-template-columns: 1fr; padding: 12px 16px 80px; gap: 12px; }
+  nav { position: static; max-height: none; display: flex; overflow-x: auto; gap: 4px; padding-bottom: 4px; }
+  nav .group { display: none; }
+  nav button.day { width: auto; flex: 0 0 auto; }
+  nav .day .n { display: none; }
+  dl.fields { grid-template-columns: 1fr; gap: 2px; }
+  dl.fields dd { margin-bottom: 10px; }
+  article.paper { padding: 16px; }
+  .overview a.row { grid-template-columns: 22px minmax(0, 1fr); }
+  .overview a.row .stars { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>论文日报</h1>
+  <span class="hint">← → 切换日期</span>
+  <span class="spacer"></span>
+  <button id="fetchBtn" class="primary">立即抓取今日日报</button>
+</header>
+
+<div class="layout">
+  <nav id="nav"></nav>
+  <main id="main"><div class="empty">加载中…</div></main>
+</div>
+
+<div id="job">
+  <div class="head"><span class="dot" id="jobDot"></span><b id="jobTitle"></b>
+    <button id="jobClose">收起</button></div>
+  <pre id="jobLog"></pre>
+</div>
+
+<script>
+const state = { digests: [], today: "", current: null, data: null, jobWasRunning: false };
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const linkify = (s) => esc(s).replace(/https?:\/\/[^\s<，。；）)]+/g,
+  (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+const informative = (v) => {
+  if (Array.isArray(v)) return v.some(informative);
+  const t = String(v ?? "").trim().replace(/[。.]$/, "");
+  return t && !["未提及", "无", "N/A"].includes(t);
+};
+const stars = (n) => n
+  ? `<span class="stars">${"★".repeat(n)}<span class="off">${"★".repeat(5 - n)}</span></span>`
+  : `<span class="stars"><span class="off">★★★★★</span></span>`;
+
+async function api(path, body) {
+  const opts = body ? { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body) } : {};
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function loadList(selectDate) {
+  const data = await api("/api/digests");
+  state.digests = data.digests;
+  state.today = data.today;
+  renderNav();
+  const target = selectDate || state.current || location.hash.slice(1) || (state.digests[0] || {}).date;
+  if (target) await openDigest(target);
+  else $("#main").innerHTML = `<div class="empty">还没有日报。点击右上角“立即抓取今日日报”。</div>`;
+}
+
+function renderNav() {
+  let html = "", lastMonth = "";
+  for (const d of state.digests) {
+    const month = d.date.slice(0, 7);
+    if (month !== lastMonth) { html += `<div class="group">${month}</div>`; lastMonth = month; }
+    html += `<button class="day ${d.date === state.current ? "active" : ""}" data-date="${d.date}">
+      <span class="d">${d.date.slice(5)}${d.date === state.today ? " · 今天" : ""}</span>
+      <span class="s">${d.best ? "★" + d.best : ""}</span>
+      <span class="n">${d.summarized ? "" : "无总结"}</span></button>`;
+  }
+  $("#nav").innerHTML = html;
+}
+
+async function openDigest(date) {
+  try {
+    state.data = await api(`/api/digest/${date}`);
+  } catch (e) {
+    $("#main").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    return;
+  }
+  state.current = date;
+  history.replaceState(null, "", `#${date}`);
+  renderNav();
+  renderDigest();
+  document.querySelector(`nav .day[data-date="${date}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function renderDigest() {
+  const { date, papers, detail_fields: fields } = state.data;
+  const summarized = papers.some((p) => p.summary);
+  const disliked = papers.filter((p) => p.disliked).length;
+  let html = `<div class="daytitle"><h2>${date}</h2>
+    <span class="sub">${papers.length} 篇${disliked ? ` · ${disliked} 篇标记为不感兴趣` : ""}</span></div>`;
+
+  if (!summarized) {
+    html += `<div class="banner"><p>这份日报还没有结构化总结。生成后会读取全文并写出创新点、方法、实验和结果（约每篇 1 分钟）。</p>
+      <button class="primary" data-act="resummarize">生成总结</button></div>`;
+  }
+
+  html += `<div class="overview">` + papers.map((p) => {
+    const s = p.summary || {};
+    const gist = informative(s.tldr) ? s.tldr : (p.summary_zh || p.title);
+    return `<a class="row ${p.disliked ? "dim" : ""}" href="#p${p.index}" data-jump="${p.index}">
+      <span class="num">${p.index}</span>${stars(s.rating)}
+      <span class="gist"><small>${esc(p.topic)}</small>${esc(gist)}</span></a>`;
+  }).join("") + `</div>`;
+
+  html += papers.map((p) => renderPaper(p, fields)).join("");
+  $("#main").innerHTML = html;
+}
+
+function renderPaper(p, fields) {
+  const s = p.summary || {};
+  const authors = (p.authors || []).join(", ") + ((p.authors || []).length === 6 ? " et al." : "");
+  const links = [`<a href="${esc(p.url)}" target="_blank" rel="noopener">原文</a>`];
+  if (p.pdf_url && p.pdf_url !== p.url) links.push(`<a href="${esc(p.pdf_url)}" target="_blank" rel="noopener">PDF</a>`);
+  const doi = p.doi || p.resolved_doi;
+  if (doi && !String(p.url).includes(doi)) links.push(`<a href="https://doi.org/${esc(doi)}" target="_blank" rel="noopener">DOI</a>`);
+
+  let body = "";
+  if (s.rating) body += `<div class="rating">${stars(s.rating)}<span class="why">${esc(s.rating_reason)}</span></div>`;
+  if (informative(s.tldr)) body += `<div class="tldr">${esc(s.tldr)}</div>`;
+  if (informative(s.relevance)) body += `<div class="relevance"><b>与我的研究</b>${esc(s.relevance)}</div>`;
+
+  const rows = fields.filter(([k]) => informative(s[k])).map(([k, label]) => {
+    const v = s[k];
+    const dd = Array.isArray(v)
+      ? `<ol>${v.filter(informative).map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`
+      : (k === "resources" ? linkify(v) : esc(v));
+    return `<dt>${label}</dt><dd>${dd}</dd>`;
+  });
+  if (rows.length) body += `<dl class="fields">${rows.join("")}</dl>`;
+  if (!p.summary && p.summary_zh) body += `<p class="legacy">${esc(p.summary_zh)}</p>`;
+  if (s.error) body += `<p class="err">⚠️ ${esc(s.error)}</p>`;
+  if (p.abstract) body += `<details class="abstract"><summary>原文摘要</summary><p>${esc(p.abstract)}</p></details>`;
+
+  return `<article class="paper ${p.disliked ? "disliked" : ""}" id="p${p.index}">
+    <div class="meta"><span class="chip topic">${esc(p.topic)}</span>
+      <span>${esc(p.source)}</span><span>·</span><span>${esc(p.published)}</span>
+      ${p.basis_text ? `<span class="chip">依据：${esc(p.basis_text)}</span>` : ""}</div>
+    <h3><span style="color:var(--ink-3)">${p.index}.</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a></h3>
+    ${authors ? `<div class="authors">${esc(authors)}${p.venue && p.venue !== p.source ? ` · ${esc(p.venue)}` : ""}</div>` : ""}
+    ${body}
+    <div class="actions">${links.join(" · ")}<span class="spacer"></span>
+      <button class="dislike ${p.disliked ? "on" : ""}" data-dislike="${p.index}">
+        ${p.disliked ? "已标记不感兴趣 · 撤销" : "👎 不感兴趣"}</button></div>
+  </article>`;
+}
+
+// ── events ────────────────────────────────────────────────────────────────
+$("#nav").addEventListener("click", (e) => {
+  const btn = e.target.closest("button.day");
+  if (btn) openDigest(btn.dataset.date).then(() => window.scrollTo({ top: 0 }));
+});
+
+$("#main").addEventListener("click", async (e) => {
+  const jump = e.target.closest("[data-jump]");
+  if (jump) {
+    e.preventDefault();
+    document.getElementById(`p${jump.dataset.jump}`)?.scrollIntoView({ behavior: "smooth" });
+    return;
+  }
+  const dis = e.target.closest("[data-dislike]");
+  if (dis) {
+    const index = Number(dis.dataset.dislike);
+    const paper = state.data.papers.find((p) => p.index === index);
+    dis.disabled = true;
+    try {
+      await api("/api/dislike", { date: state.current, index, disliked: !paper.disliked });
+      paper.disliked = !paper.disliked;
+      const y = window.scrollY;
+      renderDigest();
+      window.scrollTo({ top: y });
+    } catch (err) { alert(err.message); dis.disabled = false; }
+    return;
+  }
+  if (e.target.closest("[data-act=resummarize]")) runJob({ action: "resummarize", date: state.current });
+});
+
+$("#fetchBtn").addEventListener("click", () => {
+  const exists = state.digests.some((d) => d.date === state.today);
+  if (exists && !confirm("今天的日报已存在，重新抓取会用新选出的 3 篇覆盖它。继续吗？")) return;
+  runJob({ action: "fetch" });
+});
+
+$("#jobClose").addEventListener("click", () => $("#job").classList.remove("show"));
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+  const i = state.digests.findIndex((d) => d.date === state.current);
+  let next = null;
+  if (e.key === "ArrowRight" && i > 0) next = state.digests[i - 1].date;
+  if (e.key === "ArrowLeft" && i >= 0 && i < state.digests.length - 1) next = state.digests[i + 1].date;
+  if (next) openDigest(next).then(() => window.scrollTo({ top: 0 }));
+});
+
+// ── background job ────────────────────────────────────────────────────────
+async function runJob(body) {
+  try { await api("/api/run", body); }
+  catch (err) { alert(err.message); }
+  pollJob();
+}
+
+async function pollJob() {
+  const job = await api("/api/job");
+  const box = $("#job");
+  if (job.running || job.exit_code !== null) {
+    if (job.running) box.classList.add("show");
+    $("#jobTitle").textContent = job.running
+      ? `${job.label}…（${job.started} 开始）`
+      : `${job.label}${job.exit_code === 0 ? " 已完成" : ` 失败（退出码 ${job.exit_code}）`}`;
+    $("#jobDot").className = "dot" + (job.running ? " run" : "");
+    const log = $("#jobLog");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+    log.textContent = job.log;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  $("#fetchBtn").disabled = job.running;
+  if (job.running) {
+    state.jobWasRunning = true;
+    setTimeout(pollJob, 2000);
+  } else if (state.jobWasRunning) {
+    state.jobWasRunning = false;
+    const target = job.label.startsWith("总结") ? job.label.split(" ")[1] : state.today;
+    await loadList(target);
+  }
+}
+
+loadList().then(pollJob);
+</script>
+</body>
+</html>
